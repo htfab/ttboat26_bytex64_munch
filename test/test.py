@@ -3,38 +3,60 @@
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import ClockCycles
+from cocotb.triggers import ClockCycles, Timer
 
-
-@cocotb.test()
-async def test_project(dut):
-    dut._log.info("Start")
-
-    # Set the clock period to 10 us (100 KHz)
-    clock = Clock(dut.clk, 10, unit="us")
-    cocotb.start_soon(clock.start())
-
+async def reset(dut):
     # Reset
     dut._log.info("Reset")
-    dut.ena.value = 1
-    dut.ui_in.value = 0
-    dut.uio_in.value = 0
+    dut.rst_n.value = 1
+    await ClockCycles(dut.clk, 1);
     dut.rst_n.value = 0
-    await ClockCycles(dut.clk, 10)
+    await ClockCycles(dut.clk, 3);
     dut.rst_n.value = 1
 
-    dut._log.info("Test project behavior")
+@cocotb.test()
+async def test_munch(dut):
+    '''
+    Unfortunately this does not test much, as video and audio generation is
+    quite complex. But we do assert a few basic signals at the beginning as a
+    basic sanity check.
+    '''
+    dut._log.info("Start")
 
-    # Set the input values you want to test
-    dut.ui_in.value = 20
-    dut.uio_in.value = 30
+    # Set the clock period to 40ns (25MHz)
+    # Actual clock is 25.175 (39.722ns) but whatever
+    clock = Clock(dut.clk, 40, unit="ns")
+    clock.start()
 
-    # Wait for one clock cycle to see the output values
-    await ClockCycles(dut.clk, 1)
+    await Timer(5, "us")
+    dut.ena.value = 1
+    await Timer(5, "us")
 
-    # The following assersion is just an example of how to check the output values.
-    # Change it to match the actual expected output of your module:
-    assert dut.uo_out.value == 50
+    await reset(dut)
 
-    # Keep testing the module by changing the input values, waiting for
-    # one or more clock cycles, and asserting the expected output values.
+    dut._log.info("Test munch module")
+
+    # flops on hsync/vsync delay them by one cycle, so we wait
+    # two cycles here.
+    await ClockCycles(dut.clk, 2)
+    # Should be a black pixel at the beginning of scan
+    assert dut.uo_out.value == 0b10001000
+    # Audio is on; PWM output is 50:50 with no output, so this will be high at
+    # the beginning even though two channels are outputting immediately.
+    assert dut.uio_out.value == 0b10000000
+
+    await ClockCycles(dut.clk, 3)
+    # Pixel should be black now
+    assert dut.uo_out.value == 0b10001000
+
+    # Should put us right at the border between front porch and hsync
+    await ClockCycles(dut.clk, 640 + 16 - 3)
+    assert dut.uo_out.value == 0b00001000
+
+    # border of hsync and back porch
+    await ClockCycles(dut.clk, 96)
+    assert dut.uo_out.value == 0b10001000
+
+    # and back at the beginning of the next line; green pixel again
+    await ClockCycles(dut.clk, 48)
+    assert dut.uo_out.value == 0b10001000
